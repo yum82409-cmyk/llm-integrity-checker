@@ -15,6 +15,7 @@
 - 基准标定：用可信的官方 API 建立特定模型的行为基准。
 - 渠道测试：比较第三方渠道与官方基准的分布相似度。
 - 大横评：用同一模型和测试参数对多个渠道进行横向比较。
+- 能力评测：可选集成 EvalScope，测试 IQ、数学、知识和其他标准能力任务。
 - 本地优先：代理服务仅绑定 `127.0.0.1`，API Key 不写入代码、日志或静态配置。
 - Windows 兼容：支持路径空格、固定启动目录、非 UTF-8 控制台和端口冲突检测。
 - 中转站兼容：OpenAI 兼容接口填写服务根地址或带 `/v1` 的地址均可，代理会规范化到正确 API 路径。
@@ -38,6 +39,7 @@
 │   └── Start-Model-Integrity-Checker.ps1 # Windows 启动器
 ├── src/llm_integrity_checker/           # 项目自有 Python 包元数据
 ├── third_party/hlwy-ai-checker/         # 上游前端、代理和 LGPL 通知
+├── scripts/evalscope_runner.py          # 可选能力评测运行器（密钥仅来自进程环境）
 ├── tests/                               # 仓库布局和安全回归测试
 ├── pyproject.toml
 ├── requirements.txt
@@ -52,6 +54,8 @@
 - OpenAI 兼容 API，或页面支持的 Responses/Anthropic API 格式
 
 API Key 需要由使用者在本地页面中临时输入。项目不会提供、保存或代管任何密钥。
+
+能力评测引擎是可选依赖，不安装时不影响基础指纹检测。
 
 ## 快速启动
 
@@ -91,6 +95,16 @@ python3 -m venv .venv
 4. 在不同时间重复 2–3 轮，观察结论是否稳定。
 5. 对异常渠道再使用真实代码、长上下文和工具调用任务交叉验证。
 6. 没有公开基准的模型，先在“标定基准”中使用可信官方渠道建立基准。
+
+### 启用能力评测
+
+Windows 首次启动主程序后，在仓库目录运行：
+
+```powershell
+.\scripts\Install-Capability-Engine.ps1
+```
+
+能力评测结果保存在本机运行目录，不会进入 Git 仓库。建议先使用 10-20 个样本验证接口，再逐步提高样本数。
 
 ## 安全声明
 

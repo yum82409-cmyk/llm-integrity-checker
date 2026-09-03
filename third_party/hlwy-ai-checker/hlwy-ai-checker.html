@@ -913,6 +913,7 @@
                 <button class="tab active" data-tab="quick" onclick="switchTab('quick')">⚡ 一键鉴别</button>
                 <button class="tab" data-tab="calibrate" onclick="switchTab('calibrate')">📊 标定基准</button>
                 <button class="tab" data-tab="test" onclick="switchTab('test')">🔍 测试识别</button>
+                <button class="tab" data-tab="capability" onclick="switchTab('capability')">🧠 能力评测</button>
                 <button class="tab" data-tab="baselines" onclick="switchTab('baselines')">💾 基准管理</button>
                 <button class="tab" data-tab="compare" onclick="switchTab('compare')">🏆 大横评</button>
             </div>
@@ -1220,6 +1221,65 @@
                 </div>
             </div>
 
+            <!-- 能力评测 Tab -->
+            <div id="capability" class="tab-content">
+                <h2>🧠 模型能力评测</h2>
+                <p style="color: #666; margin-bottom: 20px;">使用 EvalScope 的标准任务测试模型能力，并同时观察渠道失败率。能力分数不能单独证明模型真伪。</p>
+
+                <div id="capability-engine-status" class="quick-meta" style="border-left-color:#667eea; margin-bottom:20px;">正在检查能力评测引擎…</div>
+
+                <div class="form-group">
+                    <label>API 类型</label>
+                    <select id="capability-api-type">
+                        <option value="openai_api">OpenAI 兼容 Chat Completions</option>
+                        <option value="openai_responses_api">OpenAI Responses API</option>
+                    </select>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Base URL</label>
+                        <input type="text" id="capability-base-url" placeholder="https://api.example.com/v1">
+                    </div>
+                    <div class="form-group">
+                        <label>API Key</label>
+                        <input type="password" id="capability-api-key" placeholder="仅本次任务使用，不会保存">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>渠道上的模型名称</label>
+                    <input type="text" id="capability-model" placeholder="以渠道实际开放的模型名为准">
+                </div>
+
+                <div class="form-group">
+                    <label>评测任务</label>
+                    <div id="capability-datasets" class="quick-meta" style="border-left-color:#ddd; display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px;"></div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>每个任务样本数 (1-200)</label>
+                        <input type="number" id="capability-limit" value="10" min="1" max="200">
+                    </div>
+                    <div class="form-group">
+                        <label>并发数 (1-8)</label>
+                        <input type="number" id="capability-concurrency" value="1" min="1" max="8">
+                    </div>
+                </div>
+
+                <div class="btn-group">
+                    <button class="btn" id="capability-btn" onclick="startCapabilityEvaluation()">🧠 开始能力评测</button>
+                    <button class="btn btn-stop" id="capability-stop-btn" onclick="stopCapabilityEvaluation()" style="display:none;">⏹ 停止评测</button>
+                    <button class="btn btn-secondary" onclick="clearCapabilityForm()">🧹 清除输入</button>
+                </div>
+                <div class="status" id="capability-status"></div>
+                <div class="result-card" id="capability-results" style="display:none;">
+                    <h3>能力评测报告</h3>
+                    <div id="capability-report"></div>
+                </div>
+            </div>
+
             <!-- 基准管理 Tab -->
             <div id="baselines" class="tab-content">
                 <h2>已保存的基准模型</h2>
@@ -1303,6 +1363,9 @@
         let quickRunning      = false;
         let currentQuickChart = null;
         let quickModelTouched = false;   // 用户是否手改过「模型名称」
+        let capabilityPollTimer = null;
+        let capabilityDatasetsLoaded = false;
+        let capabilityCurrentJobId = null;
 
         /* ========================================
          *  UI 辅助
@@ -1317,6 +1380,160 @@
             if (tabName === 'baselines') renderBaselines();
             if (tabName === 'compare') refreshBaselineSelect();
             if (tabName === 'quick' && quickModels.length === 0) loadQuickModels();
+            if (tabName === 'capability' && !capabilityDatasetsLoaded) loadCapabilityStatus();
+        }
+
+        async function loadCapabilityStatus() {
+            const status = document.getElementById('capability-engine-status');
+            const list = document.getElementById('capability-datasets');
+            try {
+                const response = await fetch('/api/capability/status');
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+                capabilityDatasetsLoaded = true;
+                list.innerHTML = data.datasets.map(item => `
+                    <label style="display:flex;align-items:center;gap:8px;color:#444;">
+                        <input type="checkbox" class="capability-dataset" value="${escapeHtml(item.id)}" ${['iquiz', 'gsm8k', 'mmlu'].includes(item.id) ? 'checked' : ''}>
+                        <span>${escapeHtml(item.name)} <code>${escapeHtml(item.id)}</code></span>
+                    </label>`).join('');
+                if (data.installed) {
+                    status.textContent = `✅ EvalScope 已安装（${data.version || '版本未知'}）。建议先用 10-20 个样本，再逐步提高。`;
+                    status.style.borderLeftColor = '#28a745';
+                } else {
+                    status.innerHTML = '⚠️ EvalScope 尚未安装。基础指纹检测不受影响，请在仓库目录运行 <code>.\\scripts\\Install-Capability-Engine.ps1</code> 后刷新页面。';
+                    status.style.borderLeftColor = '#ffb74d';
+                }
+            } catch (error) {
+                status.textContent = `无法检查能力评测引擎：${error.message}`;
+                status.style.borderLeftColor = '#dc3545';
+            }
+        }
+
+        function clearCapabilityForm() {
+            if (capabilityPollTimer) {
+                showStatus('capability-status', '当前任务仍在运行，请先停止评测后再清空表单。', 'info');
+                return;
+            }
+            document.getElementById('capability-api-key').value = '';
+            document.getElementById('capability-base-url').value = '';
+            document.getElementById('capability-model').value = '';
+            document.getElementById('capability-limit').value = '10';
+            document.getElementById('capability-concurrency').value = '1';
+            document.getElementById('capability-results').style.display = 'none';
+            document.getElementById('capability-report').textContent = '';
+            capabilityCurrentJobId = null;
+            document.getElementById('capability-stop-btn').style.display = 'none';
+            hideStatus('capability-status');
+        }
+
+        async function startCapabilityEvaluation() {
+            const baseUrl = document.getElementById('capability-base-url').value.trim();
+            const apiKey = document.getElementById('capability-api-key').value.trim();
+            const model = document.getElementById('capability-model').value.trim();
+            const datasets = [...document.querySelectorAll('.capability-dataset:checked')].map(el => el.value);
+            const limit = Number.parseInt(document.getElementById('capability-limit').value, 10);
+            const concurrency = Number.parseInt(document.getElementById('capability-concurrency').value, 10);
+            const evalType = document.getElementById('capability-api-type').value;
+
+            if (!baseUrl || !apiKey || !model) {
+                showStatus('capability-status', '请填写 Base URL、API Key 和渠道模型名称。', 'error');
+                return;
+            }
+            if (!datasets.length) {
+                showStatus('capability-status', '请至少选择一个评测任务。', 'error');
+                return;
+            }
+            if (!Number.isInteger(limit) || limit < 1 || limit > 200 || !Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) {
+                showStatus('capability-status', '样本数范围为 1-200，并发数范围为 1-8。', 'error');
+                return;
+            }
+            if (capabilityPollTimer) {
+                showStatus('capability-status', '已有能力评测任务正在运行。', 'info');
+                return;
+            }
+
+            const button = document.getElementById('capability-btn');
+            document.getElementById('capability-stop-btn').style.display = 'inline-block';
+            button.disabled = true;
+            showStatus('capability-status', '正在提交本地能力评测任务…', 'info');
+            document.getElementById('capability-results').style.display = 'block';
+            document.getElementById('capability-report').textContent = '';
+
+            try {
+                const response = await fetch('/api/capability/run', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({api_url: baseUrl, api_key: apiKey, model, datasets, limit, concurrency, eval_type: evalType})
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+                document.getElementById('capability-api-key').value = '';
+                capabilityCurrentJobId = data.job_id;
+                pollCapabilityJob(data.job_id);
+            } catch (error) {
+                document.getElementById('capability-api-key').value = '';
+                document.getElementById('capability-stop-btn').style.display = 'none';
+                button.disabled = false;
+                showStatus('capability-status', `能力评测提交失败：${error.message}`, 'error');
+            }
+        }
+
+        function pollCapabilityJob(jobId) {
+            const button = document.getElementById('capability-btn');
+            const stopButton = document.getElementById('capability-stop-btn');
+            const report = document.getElementById('capability-report');
+            const poll = async () => {
+                try {
+                    const response = await fetch(`/api/capability/job?id=${encodeURIComponent(jobId)}`);
+                    const job = await response.json();
+                    if (!response.ok) throw new Error(job.error || `HTTP ${response.status}`);
+                    report.textContent = job.output || '任务已启动，等待 EvalScope 输出…';
+                    report.style.whiteSpace = 'pre-wrap';
+                    report.style.fontFamily = 'Consolas, monospace';
+                    report.style.fontSize = '0.88em';
+                    if (job.status === 'queued' || job.status === 'running') {
+                        showStatus('capability-status', `能力评测${job.status === 'queued' ? '排队中' : '运行中'}，请保持页面打开。`, 'info');
+                        capabilityPollTimer = window.setTimeout(poll, 1500);
+                        return;
+                    }
+                    capabilityPollTimer = null;
+                    capabilityCurrentJobId = null;
+                    button.disabled = false;
+                    stopButton.style.display = 'none';
+                    if (job.status === 'completed') {
+                        showStatus('capability-status', '✅ 能力评测完成。请结合各任务分数、失败率和响应内容判断渠道质量。', 'success');
+                    } else if (job.status === 'stopped') {
+                        showStatus('capability-status', '能力评测已停止。已生成的本地输出仍保留在运行目录中。', 'info');
+                    } else {
+                        showStatus('capability-status', `❌ 能力评测失败（退出码 ${job.exit_code ?? '未知'}）。请查看下方运行输出。`, 'error');
+                    }
+                } catch (error) {
+                    capabilityPollTimer = null;
+                    capabilityCurrentJobId = null;
+                    button.disabled = false;
+                    stopButton.style.display = 'none';
+                    showStatus('capability-status', `读取能力评测状态失败：${error.message}`, 'error');
+                }
+            };
+            poll();
+        }
+
+        async function stopCapabilityEvaluation() {
+            const button = document.getElementById('capability-stop-btn');
+            button.disabled = true;
+            showStatus('capability-status', '正在停止能力评测…', 'info');
+            try {
+                const response = await fetch('/api/capability/stop', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({job_id: capabilityCurrentJobId})
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+            } catch (error) {
+                button.disabled = false;
+                showStatus('capability-status', `停止任务失败：${error.message}`, 'error');
+            }
         }
 
         function updateCalibApiFields() {
@@ -2916,6 +3133,7 @@
 
             // 默认页面：自动加载官方基准列表
             loadQuickModels();
+            loadCapabilityStatus();
         });
     </script>
 </body>

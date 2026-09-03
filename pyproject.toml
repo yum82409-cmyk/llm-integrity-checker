@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 dependencies = [
     "requests>=2.31,<3",
 ]
+optional-dependencies = { capability = ["evalscope==1.11.1"] }
 license = { file = "LICENSE" }
 authors = [
     { name = "llm-integrity-checker contributors" },

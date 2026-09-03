@@ -17,6 +17,8 @@ import threading
 import uuid
 import platform
 import sys
+import importlib.util
+import subprocess
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 APP_VERSION = '2.4.0-integrated.1'
@@ -84,6 +86,172 @@ DEFAULT_BROWSER_HEADERS = {
 # 创建全局 Session，清除默认头，避免泄漏 python-requests 指纹
 _session = req_lib.Session()
 _session.headers.clear()
+
+# ========================================
+#  可选能力评测任务（EvalScope）
+# ========================================
+CAPABILITY_DATASETS = {
+    'iquiz': 'IQ / EQ 综合题',
+    'gsm8k': '小学数学推理',
+    'mmlu': '多学科知识',
+    'mmlu_pro': '高难度多学科知识',
+    'gpqa_diamond': '研究生级科学推理',
+    'math_500': '数学推理',
+    'ifeval': '指令遵循',
+    'general_fc': '工具调用',
+}
+_capability_jobs = {}
+_capability_jobs_lock = threading.Lock()
+_capability_processes = {}
+_CAPABILITY_MAX_OUTPUT = 30000
+
+
+def _capability_runtime_root():
+    """Keep optional evaluation artifacts outside the repository."""
+    if os.name == 'nt' and os.environ.get('LOCALAPPDATA'):
+        root = os.path.join(os.environ['LOCALAPPDATA'], 'AI-Dev-Bootstrap', 'ModelIntegrityCheckerRuntime')
+    else:
+        root = os.path.join(os.path.expanduser('~'), '.cache', 'llm-integrity-checker')
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
+def _capability_engine_status():
+    installed = importlib.util.find_spec('evalscope') is not None
+    version = None
+    if installed:
+        try:
+            from evalscope.version import __version__
+            version = __version__
+        except Exception:
+            version = 'unknown'
+    return {
+        'installed': installed,
+        'version': version,
+        'datasets': [{'id': key, 'name': value} for key, value in CAPABILITY_DATASETS.items()],
+        'install_script': 'scripts/Install-Capability-Engine.ps1',
+        'upstream': 'https://github.com/modelscope/evalscope',
+    }
+
+
+def _redact_secret(value, secret):
+    if not secret or len(secret) < 8:
+        return value
+    return value.replace(secret, '[REDACTED]')
+
+
+def _run_capability_job(job_id, config, api_key):
+    runtime_root = _capability_runtime_root()
+    jobs_dir = os.path.join(runtime_root, 'capability-jobs')
+    output_dir = os.path.join(runtime_root, 'capability-results', job_id)
+    os.makedirs(jobs_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+    job_file = os.path.join(jobs_dir, f'{job_id}.json')
+
+    with open(job_file, 'w', encoding='utf-8') as handle:
+        json.dump({**config, 'work_dir': output_dir}, handle, ensure_ascii=False)
+
+    runner = os.path.abspath(os.path.join(BASE_DIR, '..', '..', 'scripts', 'evalscope_runner.py'))
+    env = os.environ.copy()
+    env['LLM_INTEGRITY_EVAL_API_KEY'] = api_key
+    output = []
+    try:
+        with _capability_jobs_lock:
+            if _capability_jobs.get(job_id, {}).get('status') == 'stopping':
+                _capability_jobs[job_id].update({
+                    'status': 'stopped',
+                    'output_dir': output_dir,
+                    'finished_at': time.time(),
+                })
+                return
+        process = subprocess.Popen(
+            [sys.executable, runner, job_file],
+            cwd=os.path.dirname(runner),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+        )
+        with _capability_jobs_lock:
+            _capability_jobs[job_id].update({'status': 'running', 'pid': process.pid})
+            _capability_processes[job_id] = process
+
+        for line in process.stdout or ():
+            clean = _redact_secret(line.rstrip(), api_key)
+            if clean:
+                output.append(clean)
+                output[:] = output[-160:]
+            with _capability_jobs_lock:
+                _capability_jobs[job_id]['output'] = '\n'.join(output)[-_CAPABILITY_MAX_OUTPUT:]
+
+        return_code = process.wait()
+        with _capability_jobs_lock:
+            job = _capability_jobs[job_id]
+            job.update({
+                'status': 'stopped' if job.get('status') == 'stopping' else ('completed' if return_code == 0 else 'failed'),
+                'exit_code': return_code,
+                'output': _redact_secret('\n'.join(output)[-_CAPABILITY_MAX_OUTPUT:], api_key),
+                'output_dir': output_dir,
+                'finished_at': time.time(),
+            })
+    except Exception as exc:
+        with _capability_jobs_lock:
+            _capability_jobs[job_id].update({
+                'status': 'failed',
+                'error': _redact_secret(str(exc), api_key),
+                'finished_at': time.time(),
+            })
+    finally:
+        with _capability_jobs_lock:
+            _capability_processes.pop(job_id, None)
+        try:
+            os.remove(job_file)
+        except OSError:
+            pass
+
+
+def _validate_capability_config(payload):
+    if not isinstance(payload, dict):
+        raise ValueError('请求体必须是 JSON 对象')
+    api_url = str(payload.get('api_url', '')).strip().rstrip('/')
+    model = str(payload.get('model', '')).strip()
+    api_key = str(payload.get('api_key', '')).strip()
+    if not api_url.startswith(('http://', 'https://')) or len(api_url) > 500:
+        raise ValueError('API URL 必须是有效的 http(s) 地址')
+    if not model or len(model) > 200:
+        raise ValueError('模型名称不能为空且不能超过 200 个字符')
+    if not api_key:
+        raise ValueError('API Key 不能为空')
+    datasets = payload.get('datasets', ['iquiz', 'gsm8k', 'mmlu'])
+    if not isinstance(datasets, list):
+        raise ValueError('datasets 必须是数组')
+    datasets = list(dict.fromkeys(str(item).strip() for item in datasets))
+    invalid = [item for item in datasets if item not in CAPABILITY_DATASETS]
+    if invalid or not datasets:
+        raise ValueError(f'不支持的数据集: {", ".join(invalid) or "空"}')
+    try:
+        limit = int(payload.get('limit', 10))
+        concurrency = int(payload.get('concurrency', 1))
+        max_tokens = int(payload.get('max_tokens', 2048))
+    except (TypeError, ValueError):
+        raise ValueError('样本数、并发数和最大输出长度必须是整数')
+    if not 1 <= limit <= 200:
+        raise ValueError('样本数范围为 1-200')
+    if not 1 <= concurrency <= 8:
+        raise ValueError('并发数范围为 1-8')
+    if not 64 <= max_tokens <= 4096:
+        raise ValueError('最大输出长度范围为 64-4096')
+    return {
+        'api_url': api_url,
+        'model': model,
+        'datasets': datasets,
+        'limit': limit,
+        'concurrency': concurrency,
+        'max_tokens': max_tokens,
+        'timeout': 120,
+    }, api_key
 
 
 # ========================================
@@ -274,6 +442,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.serve_baseline_list(query)
         elif path == '/api/baseline':
             self.serve_baseline_file(query)
+        elif path == '/api/capability/status':
+            self.send_json_response(200, _capability_engine_status())
+        elif path == '/api/capability/job':
+            self.serve_capability_job(query)
         else:
             self.send_error(404, "File not found")
 
@@ -316,11 +488,90 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         """处理 POST 请求 - 代理 API 调用"""
+        if urlparse(self.path).path == '/api/capability/run':
+            self.start_capability_job()
+            return
+        if urlparse(self.path).path == '/api/capability/stop':
+            self.stop_capability_job()
+            return
         # 代理所有 OpenAI 和 Anthropic API 请求
         if '/chat/completions' in self.path or '/messages' in self.path or '/responses' in self.path:
             self.proxy_api_request()
         else:
             self.send_error(404, "Endpoint not found")
+
+    def start_capability_job(self):
+        """Queue one local EvalScope job; the API key never enters job state or a CLI argument."""
+        if not _capability_engine_status()['installed']:
+            self.send_json_response(503, {
+                'error': 'EvalScope 尚未安装',
+                'install_script': 'scripts/Install-Capability-Engine.ps1',
+            })
+            return
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            if content_length <= 0 or content_length > 128 * 1024:
+                raise ValueError('请求体大小不合法')
+            payload = json.loads(self.rfile.read(content_length).decode('utf-8'))
+            config, api_key = _validate_capability_config(payload)
+        except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            self.send_json_response(400, {'error': str(exc)})
+            return
+
+        job_id = uuid.uuid4().hex
+        with _capability_jobs_lock:
+            _capability_jobs[job_id] = {
+                'status': 'queued',
+                'created_at': time.time(),
+                'output': '',
+                'config': {key: value for key, value in config.items() if key != 'api_key'},
+            }
+        threading.Thread(
+            target=_run_capability_job,
+            args=(job_id, config, api_key),
+            name=f'evalscope-{job_id[:8]}',
+            daemon=True,
+        ).start()
+        self.send_json_response(202, {'job_id': job_id, 'status': 'queued'})
+
+    def serve_capability_job(self, query):
+        job_id = (query.get('id', [''])[0] or '').strip()
+        if not re.fullmatch(r'[0-9a-f]{32}', job_id):
+            self.send_json_response(400, {'error': '任务 ID 不合法'})
+            return
+        with _capability_jobs_lock:
+            job = _capability_jobs.get(job_id)
+            if not job:
+                self.send_json_response(404, {'error': '任务不存在或已清理'})
+                return
+            response = dict(job)
+        self.send_json_response(200, response)
+
+    def stop_capability_job(self):
+        """Stop a running optional evaluation process."""
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            payload = json.loads(self.rfile.read(content_length).decode('utf-8')) if content_length else {}
+            job_id = str(payload.get('job_id', '')).strip()
+        except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            self.send_json_response(400, {'error': str(exc)})
+            return
+        if not re.fullmatch(r'[0-9a-f]{32}', job_id):
+            self.send_json_response(400, {'error': '任务 ID 不合法'})
+            return
+        with _capability_jobs_lock:
+            job = _capability_jobs.get(job_id)
+            process = _capability_processes.get(job_id)
+            if not job:
+                self.send_json_response(404, {'error': '任务不存在或已清理'})
+                return
+            if job.get('status') not in ('queued', 'running'):
+                self.send_json_response(200, {'status': job.get('status'), 'job_id': job_id})
+                return
+            job['status'] = 'stopping'
+        if process and process.poll() is None:
+            process.terminate()
+        self.send_json_response(202, {'status': 'stopping', 'job_id': job_id})
 
     def serve_html(self):
         """返回 HTML 文件"""

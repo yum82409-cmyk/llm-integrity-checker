@@ -1,0 +1,3 @@
+# Optional capability evaluation engine.
+# Keep this separate from the lightweight fingerprint checker.
+evalscope==1.11.1

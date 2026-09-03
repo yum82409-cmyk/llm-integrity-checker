@@ -16,6 +16,9 @@ class RepositoryLayoutTests(unittest.TestCase):
             "scripts/start.py",
             "scripts/start.sh",
             "scripts/Start-Model-Integrity-Checker.ps1",
+            "scripts/evalscope_runner.py",
+            "scripts/Install-Capability-Engine.ps1",
+            "requirements-capability.txt",
             "third_party/hlwy-ai-checker/start.py",
             "third_party/hlwy-ai-checker/hlwy-ai-checker.html",
         )
@@ -38,6 +41,26 @@ class RepositoryLayoutTests(unittest.TestCase):
         spec.loader.exec_module(module)
         self.assertEqual(module._normalize_openai_base_url("https://host"), "https://host/v1")
         self.assertEqual(module._normalize_openai_base_url("https://host/v1"), "https://host/v1")
+
+    def test_capability_config_keeps_secret_out_of_job_config(self):
+        path = ROOT / "third_party" / "hlwy-ai-checker" / "start.py"
+        spec = importlib.util.spec_from_file_location("checker_capability_server", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        config, api_key = module._validate_capability_config({
+            "api_url": "https://example.test/v1",
+            "api_key": "synthetic-secret-value",
+            "model": "test-model",
+            "datasets": ["iquiz", "gpqa_diamond"],
+            "limit": 1,
+            "concurrency": 1,
+        })
+        self.assertEqual(api_key, "synthetic-secret-value")
+        self.assertNotIn("api_key", config)
+        self.assertEqual(
+            module._redact_secret("key=synthetic-secret-value", api_key),
+            "key=[REDACTED]",
+        )
 
 
 if __name__ == "__main__":
