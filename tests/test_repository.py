@@ -42,6 +42,23 @@ class RepositoryLayoutTests(unittest.TestCase):
         self.assertEqual(module._normalize_openai_base_url("https://host"), "https://host/v1")
         self.assertEqual(module._normalize_openai_base_url("https://host/v1"), "https://host/v1")
 
+    def test_capability_config_normalizes_url_without_retaining_key(self):
+        path = ROOT / "third_party" / "hlwy-ai-checker" / "start.py"
+        spec = importlib.util.spec_from_file_location("checker_capability", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        config, api_key = module._validate_capability_config({
+            "api_url": "https://provider.example",
+            "model": "model-x",
+            "api_key": "secret-value-123",
+            "datasets": ["iquiz"],
+            "limit": 3,
+            "concurrency": 1,
+        })
+        self.assertEqual(config["api_url"], "https://provider.example/v1")
+        self.assertEqual(api_key, "secret-value-123")
+        self.assertNotIn("api_key", config)
+
     def test_capability_config_keeps_secret_out_of_job_config(self):
         path = ROOT / "third_party" / "hlwy-ai-checker" / "start.py"
         spec = importlib.util.spec_from_file_location("checker_capability_server", path)
@@ -61,6 +78,20 @@ class RepositoryLayoutTests(unittest.TestCase):
             module._redact_secret("key=synthetic-secret-value", api_key),
             "key=[REDACTED]",
         )
+
+    def test_capability_config_rejects_unknown_api_type(self):
+        path = ROOT / "third_party" / "hlwy-ai-checker" / "start.py"
+        spec = importlib.util.spec_from_file_location("checker_capability_type", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with self.assertRaisesRegex(ValueError, "不支持的 API 类型"):
+            module._validate_capability_config({
+                "api_url": "https://example.test/v1",
+                "model": "test-model",
+                "api_key": "synthetic-secret-value",
+                "datasets": ["iquiz"],
+                "eval_type": "unsupported",
+            })
 
 
 if __name__ == "__main__":

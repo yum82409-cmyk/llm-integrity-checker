@@ -215,11 +215,16 @@ def _run_capability_job(job_id, config, api_key):
 def _validate_capability_config(payload):
     if not isinstance(payload, dict):
         raise ValueError('请求体必须是 JSON 对象')
+    eval_type = str(payload.get('eval_type', 'openai_api')).strip()
+    if eval_type not in ('openai_api', 'openai_responses_api'):
+        raise ValueError('不支持的 API 类型')
     api_url = str(payload.get('api_url', '')).strip().rstrip('/')
     model = str(payload.get('model', '')).strip()
     api_key = str(payload.get('api_key', '')).strip()
     if not api_url.startswith(('http://', 'https://')) or len(api_url) > 500:
         raise ValueError('API URL 必须是有效的 http(s) 地址')
+    if eval_type in ('openai_api', 'openai_responses_api'):
+        api_url = _normalize_openai_base_url(api_url)
     if not model or len(model) > 200:
         raise ValueError('模型名称不能为空且不能超过 200 个字符')
     if not api_key:
@@ -251,6 +256,7 @@ def _validate_capability_config(payload):
         'concurrency': concurrency,
         'max_tokens': max_tokens,
         'timeout': 120,
+        'eval_type': eval_type,
     }, api_key
 
 
