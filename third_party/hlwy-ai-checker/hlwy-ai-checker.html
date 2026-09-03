@@ -1969,8 +1969,15 @@
         }
 
         /* 综合匹配度 → 模型纯度结论 */
-        function getPurityVerdict(score) {
+        function getPurityVerdict(score, reliability = null) {
             const pct = Number((score * 100).toFixed(2));   // 与页面展示的百分比保持一致，避免结论与数字互相矛盾
+            if (reliability && reliability.total > 0 && reliability.failureRate >= 0.10) {
+                return {
+                    text: '渠道不稳定，暂不能确认模型一致',
+                    className: 'verdict-warn',
+                    desc: `本次有 ${(reliability.failureRate * 100).toFixed(0)}% 的请求失败，匹配度只代表成功样本。建议降低并发、核对渠道权限并提高采样数后复测。`
+                };
+            }
             if (pct >= 96) return { text: '模型一致', className: 'verdict-good' };
             if (pct >= 90) return { text: '模型有少许降智', className: 'verdict-warn' };
             return { text: '模型存在较大纯度问题，建议其余方法复查', className: 'verdict-bad' };
@@ -2780,7 +2787,10 @@
             document.getElementById('quick-results').style.display = 'block';
 
             const score   = r.similarity.overallScore;
-            const verdict = getPurityVerdict(score);
+            const verdict = getPurityVerdict(score, {
+                total: r.iterations,
+                failureRate: r.iterations ? r.errorCount / r.iterations : 0
+            });
 
             const descMap = {
                 'verdict-good': '本次测试的随机数分布与官方基准高度一致，未发现被替换或明显降智的迹象。',
@@ -2806,7 +2816,7 @@
                     <div class="qv-score">${(score * 100).toFixed(2)}%</div>
                     <div class="qv-label">与官方基准「${escapeHtml(r.modelId)}」的综合匹配度</div>
                     <div class="qv-text">${escapeHtml(verdict.text)}</div>
-                    <div class="qv-desc">${descMap[verdict.className]}</div>
+                    <div class="qv-desc">${escapeHtml(verdict.desc || descMap[verdict.className])}</div>
                 </div>
 
                 <div class="quick-meta">
