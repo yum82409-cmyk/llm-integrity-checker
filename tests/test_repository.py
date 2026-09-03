@@ -1,4 +1,5 @@
 from pathlib import Path
+import importlib.util
 import unittest
 
 
@@ -29,6 +30,14 @@ class RepositoryLayoutTests(unittest.TestCase):
                 text = path.read_text(encoding="utf-8")
                 for value in forbidden:
                     self.assertNotIn(value, text, str(path))
+
+    def test_openai_root_url_is_normalized(self):
+        path = ROOT / "third_party" / "hlwy-ai-checker" / "start.py"
+        spec = importlib.util.spec_from_file_location("checker_server", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertEqual(module._normalize_openai_base_url("https://host"), "https://host/v1")
+        self.assertEqual(module._normalize_openai_base_url("https://host/v1"), "https://host/v1")
 
 
 if __name__ == "__main__":

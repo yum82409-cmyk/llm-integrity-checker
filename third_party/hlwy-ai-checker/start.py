@@ -123,6 +123,16 @@ def _gh_get(url, timeout=15):
     return resp.json()
 
 
+def _normalize_openai_base_url(value):
+    """Accept both provider roots and OpenAI-compatible /v1 base URLs."""
+    base_url = (value or '').strip().rstrip('/')
+    if not base_url:
+        return base_url
+    if not re.search(r'/v\d+(?:\.\d+)?$', base_url, re.IGNORECASE):
+        base_url += '/v1'
+    return base_url
+
+
 def fetch_baseline_list(force=False):
     """
     获取 baselines 目录下的全部模型。
@@ -349,11 +359,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
             # 确定目标 URL
             if '/chat/completions' in self.path:
                 # OpenAI Chat Completions API
-                base_url = self.headers.get('X-Target-Base-URL', 'https://api.openai.com/v1')
+                base_url = _normalize_openai_base_url(
+                    self.headers.get('X-Target-Base-URL', 'https://api.openai.com/v1')
+                )
                 target_url = f"{base_url.rstrip('/')}/chat/completions"
             elif '/responses' in self.path:
                 # OpenAI Responses API
-                base_url = self.headers.get('X-Target-Base-URL', 'https://api.openai.com/v1')
+                base_url = _normalize_openai_base_url(
+                    self.headers.get('X-Target-Base-URL', 'https://api.openai.com/v1')
+                )
                 target_url = f"{base_url.rstrip('/')}/responses"
             elif '/messages' in self.path:
                 # Anthropic API
