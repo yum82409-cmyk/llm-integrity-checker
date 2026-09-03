@@ -1,0 +1,8 @@
+{
+  "upstream": "https://github.com/hanlinwenyuan/hlwy-ai-checker",
+  "version": "2.4.0",
+  "release_date": "2026-08-28",
+  "release_asset": "hlwy-ai-checker.zip",
+  "sha256": "B928A3A09C3EB505A5A610B451FB112CD8F247A409162396262C812A3695438B",
+  "integration_patch": "integrated.1"
+}

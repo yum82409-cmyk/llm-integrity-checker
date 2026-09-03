@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-integrity-checker"
+version = "1.0.0"
+description = "Local-first fingerprint-based checks for third-party LLM API integrity."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31,<3",
+]
+license = { file = "LICENSE" }
+authors = [
+    { name = "llm-integrity-checker contributors" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
