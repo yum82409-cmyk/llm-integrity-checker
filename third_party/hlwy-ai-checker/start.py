@@ -307,6 +307,18 @@ def _normalize_openai_base_url(value):
     return base_url
 
 
+def _normalize_anthropic_base_url(value):
+    """Accept provider roots, /v1 roots, and accidentally pasted /messages URLs."""
+    base_url = (value or '').strip().rstrip('/')
+    if not base_url:
+        return base_url
+    if base_url.lower().endswith('/messages'):
+        base_url = base_url[:-len('/messages')].rstrip('/')
+    if not re.search(r'/v\d+(?:\.\d+)?$', base_url, re.IGNORECASE):
+        base_url += '/v1'
+    return base_url
+
+
 def fetch_baseline_list(force=False):
     """
     获取 baselines 目录下的全部模型。
@@ -628,7 +640,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 target_url = f"{base_url.rstrip('/')}/responses"
             elif '/messages' in self.path:
                 # Anthropic API
-                base_url = self.headers.get('X-Target-Base-URL', 'https://api.anthropic.com/v1')
+                base_url = _normalize_anthropic_base_url(
+                    self.headers.get('X-Target-Base-URL', 'https://api.anthropic.com/v1')
+                )
                 target_url = f"{base_url.rstrip('/')}/messages"
             else:
                 self.send_json_response(400, {'error': '不支持的 API 端点'})

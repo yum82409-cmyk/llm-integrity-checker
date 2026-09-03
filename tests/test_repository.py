@@ -42,6 +42,15 @@ class RepositoryLayoutTests(unittest.TestCase):
         self.assertEqual(module._normalize_openai_base_url("https://host"), "https://host/v1")
         self.assertEqual(module._normalize_openai_base_url("https://host/v1"), "https://host/v1")
 
+    def test_anthropic_root_url_is_normalized(self):
+        path = ROOT / "third_party" / "hlwy-ai-checker" / "start.py"
+        spec = importlib.util.spec_from_file_location("checker_anthropic_url", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertEqual(module._normalize_anthropic_base_url("https://host"), "https://host/v1")
+        self.assertEqual(module._normalize_anthropic_base_url("https://host/v1"), "https://host/v1")
+        self.assertEqual(module._normalize_anthropic_base_url("https://host/v1/messages"), "https://host/v1")
+
     def test_capability_config_normalizes_url_without_retaining_key(self):
         path = ROOT / "third_party" / "hlwy-ai-checker" / "start.py"
         spec = importlib.util.spec_from_file_location("checker_capability", path)
