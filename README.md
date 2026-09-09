@@ -29,20 +29,23 @@
 
 该方法只能回答“行为是否与基准一致”，不能单独证明服务商实际部署了某个模型，也不能替代安全审计、合同核验或完整能力评测。
 
-## 架构
+## 目录结构
 
 ```text
 .
+├── Start-Model-Integrity-Checker.cmd    # Windows 双击入口
 ├── scripts/
-│   ├── start.py                         # 跨平台 Python 启动入口
+│   ├── Start-Model-Integrity-Checker.ps1 # Windows 主启动器
 │   ├── start.sh                         # Linux/macOS 启动器
-│   └── Start-Model-Integrity-Checker.ps1 # Windows 启动器
-├── src/llm_integrity_checker/           # 项目自有 Python 包元数据
+│   ├── start.py                         # 跨平台 Python 入口
+│   ├── evalscope_runner.py              # 可选能力评测运行器
+│   └── Install-Capability-Engine.ps1    # 安装可选能力评测依赖
+├── src/llm_integrity_checker/           # 项目包元数据
 ├── third_party/hlwy-ai-checker/         # 上游前端、代理和 LGPL 通知
-├── scripts/evalscope_runner.py          # 可选能力评测运行器（密钥仅来自进程环境）
-├── tests/                               # 仓库布局和安全回归测试
-├── pyproject.toml
-├── requirements.txt
+├── legacy/bootstrap/                    # 原工作区历史材料，不参与本项目运行
+├── tests/                               # 安全与布局回归测试
+├── pyproject.toml                       # 项目元数据和可选依赖
+├── requirements.txt                     # 基础运行依赖
 ├── SECURITY.md
 └── THIRD_PARTY_NOTICES.md
 ```
@@ -63,12 +66,15 @@ API Key 需要由使用者在本地页面中临时输入。项目不会提供、
 
 ```powershell
 cd 'C:\path\to\llm-integrity-checker'
-py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\scripts\Start-Model-Integrity-Checker.ps1
 ```
 
-也可以双击根目录的 `Start-Model-Integrity-Checker.cmd`。
+也可以直接双击根目录的 `Start-Model-Integrity-Checker.cmd`。启动器会在
+`%LOCALAPPDATA%\AI-Dev-Bootstrap\ModelIntegrityCheckerRuntime` 创建并复用隔离环境，
+不会在仓库中生成虚拟环境或运行结果。
+
+启动后打开 `http://127.0.0.1:8000/`。服务停止后地址不会响应；在 PowerShell
+窗口按 `Ctrl+C` 可以停止服务。
 
 自定义端口：
 
@@ -105,6 +111,17 @@ Windows 首次启动主程序后，在仓库目录运行：
 ```
 
 能力评测结果保存在本机运行目录，不会进入 Git 仓库。建议先使用 10-20 个样本验证接口，再逐步提高样本数。
+
+能力评测依赖 [ModelScope EvalScope](https://github.com/modelscope/evalscope)，
+只用于标准能力任务。它不能绕过渠道认证，也不能单独证明中转站部署了某个真实模型。
+
+## 归档边界
+
+- 基础功能是随机数分布指纹检测，适合观察渠道行为是否接近官方基准。
+- 能力评测是可选模块，适合观察数学、知识、指令遵循和工具调用能力。
+- `401`、`403`、`404`、`429`、`500` 和超时表示接口或渠道问题，不应直接解释为模型能力下降。
+- 结论应结合多轮采样、错误率、标准能力任务和真实业务任务。
+- 项目仅监听 `127.0.0.1`，不提供公网部署配置。
 
 ## 安全声明
 
@@ -152,3 +169,5 @@ gh repo create llm-integrity-checker --public --source=. --remote=origin --push
 git remote add origin https://github.com/<YOUR_USERNAME>/llm-integrity-checker.git
 git push -u origin main
 ```
+
+当前公开仓库：[yum82409-cmyk/llm-integrity-checker](https://github.com/yum82409-cmyk/llm-integrity-checker)

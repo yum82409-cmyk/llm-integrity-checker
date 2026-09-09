@@ -11,6 +11,8 @@ class RepositoryLayoutTests(unittest.TestCase):
         required = (
             "LICENSE",
             "README.md",
+            "CHANGELOG.md",
+            "CONTRIBUTING.md",
             "pyproject.toml",
             "requirements.txt",
             "scripts/start.py",
